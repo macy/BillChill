@@ -149,12 +149,21 @@ def hospitals():
     data = request.get_json(force=True) or {}
     lat = data.get("lat")
     lon = data.get("lon")
+    location_query = data.get("location") # NEW: Accept location string
     condition = (data.get("condition") or "").strip()
 
-    if lat is None or lon is None:
-        return jsonify({"error": "lat/lon required"}), 400
     if not condition:
         return jsonify({"error": "condition required"}), 400
+
+    # NEW: If location_query is provided, geocode it.
+    if location_query and (lat is None or lon is None):
+        geocoded_lat, geocoded_lon = forward_geocode(location_query)
+        if geocoded_lat is None or geocoded_lon is None:
+             return jsonify({"error": f"Could not find location: '{location_query}'"}), 400
+        lat, lon = geocoded_lat, geocoded_lon
+
+    if lat is None or lon is None:
+        return jsonify({"error": "Location required (enable GPS or enter city/zip)"}), 400
 
     try:
         lat = float(lat)

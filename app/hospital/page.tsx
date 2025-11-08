@@ -1,4 +1,3 @@
-// app/hospital/page.js
 "use client";
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
@@ -23,13 +22,14 @@ export default function HospitalPage() {
   // State for search UI
   const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState("");
+  const [locationQuery, setLocationQuery] = useState(""); // NEW: Location input state
   
   // State for data fetching
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<HospitalResult[]>([]);
   
-  // NEW: State for active sort method ('price' is default)
+  // State for active sort method ('price' is default)
   const [sortBy, setSortBy] = useState<'price' | 'distance'>('price');
 
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000";
@@ -37,7 +37,7 @@ export default function HospitalPage() {
   // Determine if search button should be enabled
   const canSearch = useMemo(() => query.trim().length > 0 && !loading, [query, loading]);
 
-  // NEW: Automatically sort results whenever 'results' or 'sortBy' changes
+  // Automatically sort results whenever 'results' or 'sortBy' changes
   const sortedResults = useMemo(() => {
     return [...results].sort((a, b) => {
       if (sortBy === 'distance') {
@@ -56,15 +56,26 @@ export default function HospitalPage() {
     });
   }, [results, sortBy]);
 
-  // Function to fetch hospital data from backend
-  const fetchHospitals = useCallback(async (lat: number, lon: number) => {
+  // Updated function to fetch hospital data from backend
+  const fetchHospitals = useCallback(async (lat: number | null, lon: number | null, locStr: string | null = null) => {
     setLoading(true);
     setError(null);
     try {
+      const payload: any = { condition: query.trim() };
+      if (locStr) {
+          payload.location = locStr;
+      } else if (lat !== null && lon !== null) {
+          payload.lat = lat;
+          payload.lon = lon;
+      } else {
+          // Should not happen if called correctly, but good as fallback
+          throw new Error("No location provided.");
+      }
+
       const resp = await fetch(`${BACKEND_URL}/api/hospitals`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat, lon, condition: query.trim() }),
+        body: JSON.stringify(payload),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -79,27 +90,34 @@ export default function HospitalPage() {
     }
   }, [query, BACKEND_URL]);
 
-  // Handler for search action
+  // Updated handler for search action
   const handleSearch = useCallback(() => {
     if (!query.trim()) return;
+
+    // Priority 1: Explicit location input
+    if (locationQuery.trim()) {
+        fetchHospitals(null, null, locationQuery.trim());
+        return;
+    }
+
+    // Priority 2: Browser Geolocation
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       setLoading(true);
       setError(null);
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          const { latitude, longitude } = pos.coords;
-          fetchHospitals(latitude, longitude);
+          fetchHospitals(pos.coords.latitude, pos.coords.longitude);
         },
         (err) => {
           setLoading(false);
-          setError("Location permission denied. Please enable location services.");
+          setError("Location permission denied. Please enter a city or zip code.");
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     } else {
-      setError("Geolocation is not supported in this browser.");
+      setError("Geolocation is not supported. Please enter a location manually.");
     }
-  }, [query, fetchHospitals]);
+  }, [query, locationQuery, fetchHospitals]);
 
   return (
     <main className="min-h-screen bg-slate-50/80 relative">
@@ -133,44 +151,68 @@ export default function HospitalPage() {
             </p>
           </div>
 
-          {/* SEARCH BAR */}
+          {/* UPDATED SEARCH BAR CONTAINER */}
           <div 
             className={`
-              bg-white p-2 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex items-center 
+              bg-white p-2 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] flex flex-col md:flex-row md:items-center 
               border-2 transition-all duration-300 mb-16 animate-fade-in [animation-delay:100ms]
               ${isSearching ? 'border-teal-400 shadow-[0_8px_30px_rgb(20,184,166,0.2)] scale-[1.02]' : 'border-transparent'}
             `}
           >
-            <span className={`pl-6 transition-colors duration-300 ${isSearching ? 'text-teal-500' : 'text-slate-400'}`}>
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-6 h-6">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-              </svg>
-            </span>
-            <input
-              type="text"
-              placeholder="Try 'MRI', 'X-Ray' or 'Checkup'..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && canSearch) handleSearch(); }}
-              onFocus={() => setIsSearching(true)}
-              onBlur={() => setIsSearching(false)}
-              className="w-full p-4 bg-transparent text-xl outline-none text-slate-800 placeholder:text-slate-300 font-bold"
-            />
+            {/* CONDITION INPUT */}
+            <div className="flex-1 flex items-center border-b-2 md:border-b-0 md:border-r-2 border-slate-100 p-2">
+                <span className={`pl-2 transition-colors duration-300 ${isSearching ? 'text-teal-500' : 'text-slate-400'}`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                  </svg>
+                </span>
+                <input
+                  type="text"
+                  placeholder="Condition (e.g., MRI, X-Ray)..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && canSearch) handleSearch(); }}
+                  onFocus={() => setIsSearching(true)}
+                  onBlur={() => setIsSearching(false)}
+                  className="w-full p-4 bg-transparent text-lg md:text-xl outline-none text-slate-800 placeholder:text-slate-300 font-bold"
+                />
+            </div>
+
+            {/* NEW LOCATION INPUT */}
+            <div className="flex-1 flex items-center p-2">
+                <span className="pl-2 text-slate-400">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                  </svg>
+                </span>
+                <input
+                  type="text"
+                  placeholder="Current Location (or enter city)"
+                  value={locationQuery}
+                  onChange={(e) => setLocationQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && canSearch) handleSearch(); }}
+                  onFocus={() => setIsSearching(true)}
+                  onBlur={() => setIsSearching(false)}
+                  className="w-full p-4 bg-transparent text-lg md:text-xl outline-none text-slate-800 placeholder:text-slate-300 font-bold"
+                />
+            </div>
+
+            {/* SEARCH BUTTON (Desktop) */}
             <button
               onClick={handleSearch}
               disabled={!canSearch}
-              className={`hidden sm:block px-8 py-4 rounded-2xl font-bold transition-all ${canSearch ? "bg-teal-600 text-white hover:bg-teal-500 hover:scale-105 active:scale-95" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
+              className={`hidden md:block px-8 py-4 mx-2 rounded-2xl font-bold transition-all whitespace-nowrap ${canSearch ? "bg-teal-600 text-white hover:bg-teal-500 hover:scale-105 active:scale-95" : "bg-slate-200 text-slate-400 cursor-not-allowed"}`}
             >
               {loading ? "Searching…" : "Search"}
             </button>
+             {/* SEARCH BUTTON (Mobile) */}
              <button
               onClick={handleSearch}
               disabled={!canSearch}
-              className={`sm:hidden p-4 rounded-full font-bold transition-all mr-1 ${canSearch ? "bg-teal-600 text-white active:scale-90" : "bg-slate-200 text-slate-400"}`}
+              className={`md:hidden w-full py-4 mt-2 rounded-2xl font-bold transition-all ${canSearch ? "bg-teal-600 text-white active:scale-95" : "bg-slate-200 text-slate-400"}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-6 h-6">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-              </svg>
+              {loading ? "Searching…" : "Search Nearby"}
             </button>
           </div>
 
@@ -208,7 +250,7 @@ export default function HospitalPage() {
               </div>
             )}
 
-            {/* NEW: SORTING CONTROLS */}
+            {/* SORTING CONTROLS */}
             {!loading && results.length > 0 && !error && (
               <div className="max-w-3xl mx-auto mb-6 flex flex-col sm:flex-row justify-between items-center gap-4 animate-fade-in">
                 <p className="text-slate-500 font-bold text-sm uppercase tracking-widest">
