@@ -1,4 +1,3 @@
-// tailwind.config.ts
 import type { Config } from "tailwindcss";
 
 const config: Config = {
@@ -10,19 +9,20 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        primary: '#0D9488',  // Teal (Healing/Action)
-        secondary: '#0F172A', // Navy (Trust/Text)
-        bgSoft: '#F8FAFC',   // Slate-50 (Calm Background)
+        // The new "Chill" palette
+        chill: '#0EA5E9',    // Sky-500: Friendly, active blue
+        deep: '#2055d1ff',     // Slate-900: High contrast text
+        soft: '#F1F5F9',     // Slate-100: Very subtle backgrounds for cards
       },
       animation: {
-        'fade-in': 'fadeIn 0.5s ease-out',
+        'float': 'float 3s ease-in-out infinite',
       },
       keyframes: {
-        fadeIn: {
-          '0%': { opacity: '0', transform: 'translateY(10px)' },
-          '100%': { opacity: '1', transform: 'translateY(0)' },
+        float: {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-10px)' },
         },
-      },
+      }
     },
   },
   plugins: [],
