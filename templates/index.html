@@ -61,13 +61,13 @@
     });
 
     function mapsLinkFor(r) {
-      const origin = coords ? `&origin=${encodeURIComponent(coords.lat + "," + coords.lon)}` : "&origin=My+Location";
-      if (r.maps_url) return `${r.maps_url}${origin}`;
-      if (typeof r.latitude === "number" && typeof r.longitude === "number") {
-        return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(coords.lat + "," + coords.lon)}&destination=${r.latitude},${r.longitude}`;
+      // Server provides maps_url preferring address; otherwise build fallback.
+      if (r.maps_url) return r.maps_url;
+      if (coords && r.address) {
+        return `https://www.google.com/maps/dir/?api=1&origin=${coords.lat},${coords.lon}&destination=${encodeURIComponent(r.address)}&travelmode=driving`;
       }
-      if (r.address) {
-        return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(coords.lat + "," + coords.lon)}&destination=${encodeURIComponent(r.address)}`;
+      if (coords && typeof r.latitude === "number" && typeof r.longitude === "number") {
+        return `https://www.google.com/maps/dir/?api=1&origin=${coords.lat},${coords.lon}&destination=${r.latitude},${r.longitude}&travelmode=driving`;
       }
       return null;
     }

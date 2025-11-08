@@ -78,6 +78,37 @@ def reverse_geocode(lat: float, lon: float):
         # Soft fallback
         return {"city": None, "state": None, "country": None, "label": "this area"}
 
+@lru_cache(maxsize=512)
+def forward_geocode(address: str):
+    """Resolve a free-form address/place name to (lat, lon) using Nominatim.
+    Returns tuple (lat, lon) or (None, None) if not found. Light caching to avoid rate issues.
+    """
+    if not address:
+        return (None, None)
+    try:
+        params = {
+            "format": "jsonv2",
+            "q": address,
+            "limit": 1,
+        }
+        headers = {
+            "User-Agent": f"hospital-price-finder/1.0 ({NOMINATIM_EMAIL or 'no-email-provided'})"
+        }
+        resp = requests.get("https://nominatim.openstreetmap.org/search", params=params, headers=headers, timeout=8)
+        resp.raise_for_status()
+        arr = resp.json() or []
+        if not arr:
+            return (None, None)
+        item = arr[0]
+        lat = item.get("lat")
+        lon = item.get("lon")
+        try:
+            return (float(lat), float(lon))
+        except Exception:
+            return (None, None)
+    except Exception:
+        return (None, None)
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -190,12 +221,22 @@ def hospitals():
             except Exception:
                 pass
 
-        # Build Google Maps navigation link
+        # Ensure we have lat/long for destination; if missing but address exists, try forward geocode
+        if (not isinstance(lat2, (int, float)) or not isinstance(lon2, (int, float))) and addr:
+            fg_lat, fg_lon = forward_geocode(addr)
+            if isinstance(fg_lat, (int, float)) and isinstance(fg_lon, (int, float)):
+                lat2, lon2 = fg_lat, fg_lon
+
+        # Build Google Maps navigation link (prefer destination by address for user clarity)
         maps_url = None
-        if isinstance(lat2, (int, float)) and isinstance(lon2, (int, float)):
-            maps_url = f"https://www.google.com/maps/dir/?api=1&destination={lat2},{lon2}"
-        elif addr:
-            maps_url = f"https://www.google.com/maps/dir/?api=1&destination={requests.utils.quote(addr)}"
+        if addr:
+            maps_url = (
+                f"https://www.google.com/maps/dir/?api=1&origin={lat},{lon}&destination={requests.utils.quote(addr)}&travelmode=driving"
+            )
+        elif isinstance(lat2, (int, float)) and isinstance(lon2, (int, float)):
+            maps_url = (
+                f"https://www.google.com/maps/dir/?api=1&origin={lat},{lon}&destination={lat2},{lon2}&travelmode=driving"
+            )
 
         # Price normalization
         price_raw = it.get("price_usd")
@@ -215,7 +256,7 @@ def hospitals():
             "price_usd": price_val,
             "price_is_estimate": bool(it.get("price_is_estimate", True)),
             "notes": it.get("notes"),
-            "maps_url": maps_url,
+            "maps_url": maps_url,  # already contains origin + destination for accurate routing
             "source_locality": city_label,  # useful for debugging
         })
 
