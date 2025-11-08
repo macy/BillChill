@@ -2,3 +2,4 @@ requests
 python-dotenv
 Flask
 PyPDF2
+google-genai>=0.3.0

@@ -98,7 +98,7 @@
         } else {
           for (const r of items) {
             const price = (r.price_usd == null) ? "—" : `$${Number(r.price_usd).toLocaleString()}`;
-            const dist = (r.distance_km == null) ? "" : ` • ${r.distance_km} km`;
+            const dist = (r.distance_miles == null) ? "" : ` • ${r.distance_miles} mi`;
             const est = r.price_is_estimate ? " (est.)" : "";
             const phone = r.phone ? ` • ${r.phone}` : "";
             const addr = r.address ? `<div class="muted">${r.address}</div>` : "";
