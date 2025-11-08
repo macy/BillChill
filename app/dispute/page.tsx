@@ -22,6 +22,7 @@ export default function DisputePage() {
   const [parsedDiscount, setParsedDiscount] = useState<string>("");
   const [discountExplanation, setDiscountExplanation] = useState<string>("");
   const [overchargeSection, setOverchargeSection] = useState<string>("");
+  const [overcharges, setOvercharges] = useState<OverchargeItem[]>([]);
   
   // Structured AI response shape from backend
   type OverchargeItem = {
@@ -136,8 +137,10 @@ export default function DisputePage() {
             return `- Line ${ln}: ${svc} ${amt} | Reason: ${reason}`;
           });
           setOverchargeSection(lines.join("\n"));
+          setOvercharges(items as OverchargeItem[]);
         } else {
           setOverchargeSection("No overcharges detected");
+          setOvercharges([]);
         }
       } else {
         // Fallback: parse the legacy string
@@ -146,6 +149,7 @@ export default function DisputePage() {
         setParsedDiscount(parsed.totalDiscount || "");
         setDiscountExplanation(parsed.discountExplanation || "");
         setOverchargeSection(parsed.overchargesText || full);
+        setOvercharges([]);
       }
     } catch (e: any) {
       setError(e?.message || "Something went wrong.");
@@ -389,7 +393,7 @@ export default function DisputePage() {
             </button>
             {file && (
               <button
-                onClick={() => { setFile(null); setRulesFile(null); setAiResult(""); setDisputeLetter(""); setError(""); setParsedDiscount(""); setParsedState(""); setDiscountExplanation(""); setOverchargeSection(""); }}
+                onClick={() => { setFile(null); setRulesFile(null); setAiResult(""); setDisputeLetter(""); setError(""); setParsedDiscount(""); setParsedState(""); setDiscountExplanation(""); setOverchargeSection(""); setOvercharges([]); }}
                 className="inline-flex items-center gap-2 rounded-full bg-white text-slate-600 border border-slate-200 font-bold px-6 py-3 shadow-sm hover:shadow"
               >
                 Reset
@@ -437,7 +441,9 @@ export default function DisputePage() {
               <div className="bg-white/90 backdrop-blur-md rounded-3xl p-6 md:p-7 shadow-lg border border-slate-100/60">
                 <div className="flex items-start justify-between gap-4 mb-4">
                   <h3 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-100 text-teal-600 text-sm font-bold">AI</span>
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-100 text-teal-600 text-base font-extrabold" aria-hidden>
+                      $
+                    </span>
                     Overcharge Findings
                   </h3>
                   {(overchargeSection || aiResult) && (
@@ -454,16 +460,52 @@ export default function DisputePage() {
                     </button>
                   )}
                 </div>
-                <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
-                  {overchargeSection || aiResult || <span className="italic text-slate-400">No findings returned.</span>}
-                </div>
+                {overcharges && overcharges.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm text-left text-slate-700">
+                      <thead className="border-b text-slate-500 uppercase text-xs tracking-wide">
+                        <tr>
+                          <th className="py-2 pr-3">Line</th>
+                          <th className="py-2 pr-3">Service</th>
+                          <th className="py-2 pr-3">Amount</th>
+                          <th className="py-2 pr-3">Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {overcharges.map((oc, idx) => (
+                          <tr key={idx} className="border-b last:border-0 align-top">
+                            <td className="py-2 pr-3 whitespace-nowrap">{oc.line_number ?? "—"}</td>
+                            <td className="py-2 pr-3 max-w-[28rem]"><span className="whitespace-pre-wrap break-words">{oc.service || "—"}</span></td>
+                            <td className="py-2 pr-3 whitespace-nowrap">
+                              {typeof oc.amount === 'number' && !isNaN(oc.amount)
+                                ? `$${oc.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : "—"}
+                            </td>
+                            <td className="py-2 pr-3 max-w-[36rem]"><span className="whitespace-pre-wrap break-words">{oc.reason || "—"}</span></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
+                    {overchargeSection || aiResult || <span className="italic text-slate-400">No findings returned.</span>}
+                  </div>
+                )}
               </div>
               {/* Dispute Letter Panel */}
               {disputeLetter && (
                 <div className="bg-gradient-to-br from-white/95 to-white/80 backdrop-blur-md rounded-[2.25rem] p-6 md:p-8 shadow-xl border border-slate-100/60 relative">
                   <div className="relative z-10">
                     <div className="flex items-start justify-between gap-4 mb-6">
-                      <h3 className="text-xl font-bold text-slate-800 tracking-tight">Draft Dispute Letter</h3>
+                      <h3 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-100 text-teal-600">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h6m7-2V7a2 2 0 00-2-2H7l-4 4v10a2 2 0 002 2h12a2 2 0 002-2v-7z" />
+                          </svg>
+                        </span>
+                        Draft Dispute Letter
+                      </h3>
                       <div className="flex items-center gap-2 flex-wrap">
                         <button
                           onClick={handleCopyLetter}
