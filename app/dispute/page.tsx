@@ -14,7 +14,8 @@ export default function DisputePage() {
   const [error, setError] = useState<string>("");
   const [aiResult, setAiResult] = useState<string>("");
   const [disputeLetter, setDisputeLetter] = useState<string>("");
-
+  const [copied, setCopied] = useState<boolean>(false);
+  
   const PROVIDERS = ["United", "Providence", "Molina", "CMS"] as const;
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000"; // unified Flask backend
 
@@ -84,6 +85,36 @@ export default function DisputePage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCopyLetter = useCallback(() => {
+    if (!disputeLetter) return;
+    navigator.clipboard.writeText(disputeLetter).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [disputeLetter]);
+
+  const handleDownloadLetter = useCallback(() => {
+    if (!disputeLetter) return;
+    const blob = new Blob([disputeLetter], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dispute_letter_${patientName.replace(/\s+/g, '_') || 'patient'}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [disputeLetter, patientName]);
+
+  const renderFormattedLetter = () => {
+    if (!disputeLetter) return null;
+    return disputeLetter
+      .split(/\n{2,}/)
+      .map((para, i) => (
+        <p key={i} className="mb-4 leading-relaxed text-slate-700 whitespace-pre-line">
+          {para.trim()}
+        </p>
+      ));
   };
 
   return (
@@ -245,15 +276,78 @@ export default function DisputePage() {
 
           {/* Results */}
           {(aiResult || disputeLetter) && (
-            <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6 text-left animate-fade-in [animation-delay:300ms]">
-              <div className="bg-white/80 backdrop-blur-md rounded-3xl p-6 shadow">
-                <h3 className="text-xl font-bold text-slate-800 mb-3">AI Overcharge Findings</h3>
-                <pre className="whitespace-pre-wrap text-slate-700 text-sm">{aiResult}</pre>
+            <div className="mt-10 space-y-8 text-left animate-fade-in [animation-delay:300ms]">
+              {/* Findings Panel */}
+              <div className="bg-white/90 backdrop-blur-md rounded-3xl p-6 md:p-7 shadow-lg border border-slate-100/60">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <h3 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-100 text-teal-600 text-sm font-bold">AI</span>
+                    Overcharge Findings
+                  </h3>
+                  {aiResult && (
+                    <button
+                      onClick={() => navigator.clipboard.writeText(aiResult)}
+                      className="group inline-flex items-center gap-1 rounded-full bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold px-3 py-1.5 shadow-sm border border-teal-200 transition"
+                      title="Copy findings"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15V5a2 2 0 012-2h10" />
+                      </svg>
+                      <span>Copy</span>
+                    </button>
+                  )}
+                </div>
+                <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
+                  {aiResult || <span className="italic text-slate-400">No findings returned.</span>}
+                </div>
               </div>
-              <div className="bg-white/80 backdrop-blur-md rounded-3xl p-6 shadow">
-                <h3 className="text-xl font-bold text-slate-800 mb-3">Draft Dispute Letter</h3>
-                <pre className="whitespace-pre-wrap text-slate-700 text-sm">{disputeLetter}</pre>
-              </div>
+              {/* Dispute Letter Panel */}
+              {disputeLetter && (
+                <div className="bg-gradient-to-br from-white/95 to-white/80 backdrop-blur-md rounded-[2.25rem] p-6 md:p-8 shadow-xl border border-slate-100/60 relative">
+                  <div className="relative z-10">
+                    <div className="flex items-start justify-between gap-4 mb-6">
+                      <h3 className="text-2xl font-black text-slate-800 tracking-tight">Draft Dispute Letter</h3>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          onClick={handleCopyLetter}
+                          className="group inline-flex items-center gap-1 rounded-full bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold px-3 py-1.5 shadow-sm border border-teal-200 transition"
+                          title="Copy letter"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15V5a2 2 0 012-2h10" />
+                          </svg>
+                          <span>Copy</span>
+                        </button>
+                        <button
+                          onClick={handleDownloadLetter}
+                          className="group inline-flex items-center gap-1.5 rounded-full bg-teal-600 text-white text-xs font-semibold px-4 py-2 shadow hover:bg-teal-500 hover:shadow-md active:scale-[.97] transition"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M7 10l5 5 5-5M12 4v11m8 5H4" />
+                          </svg>
+                          Download
+                        </button>
+                        {copied && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-700 text-[11px] font-semibold px-3 py-1 shadow-sm">
+                            Copied!
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="prose prose-sm max-w-none">
+                      {renderFormattedLetter()}
+                    </div>
+                    <div className="mt-6 pt-4 border-t border-slate-200 text-[11px] text-slate-500 font-medium flex items-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-teal-600">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9 9V5h2v4H9zm0 2h2v4H9v-4z" clipRule="evenodd" />
+                      </svg>
+                      This draft is generated by AI. Review and personalize before sending.
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
