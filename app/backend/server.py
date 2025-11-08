@@ -348,15 +348,155 @@ Instructions:
     return response.choices[0].message.content
 
 
-def draft_dispute_letter(patient_name, hospital_name, bill_text, ai_overcharge_report):
+def ai_check_overcharges_and_discount(rules_text, bill_text, household_size, annual_income, zip_code):
+    """Structured AI analysis returning a dict.
+
+    Returns a dictionary with keys:
+    - state_abbr: two-letter state code or None
+    - total_eligible_discount_percent: numeric percentage (e.g., 45 for 45%) or None
+    - discount_explanation: free-form string explanation
+    - overcharges: list of {line_number, service, amount, reason}
+    - raw_model_text: original model output (for legacy or debugging)
+
+    We instruct the model to emit strict JSON to reduce fragile downstream parsing.
+    """
     if client is None:
         raise RuntimeError("Missing OPENAI_API_KEY")
-    prompt = f"""
-Draft a formal letter to dispute overcharges for {patient_name} at {hospital_name}.
-Reference the following overcharges and request correction.
 
-Overcharges:
-{ai_overcharge_report}
+    system_instructions = (
+        "You are a hospital billing auditor AI. Output ONLY valid JSON matching the schema. "
+        "No prose outside JSON. Percent values should be numeric without the % sign where possible."
+    )
+
+    json_schema_description = {
+        "state_abbr": "Two-letter US state abbreviation derived from ZIP (null if uncertain)",
+        "total_eligible_discount_percent": "Estimated total discount percentage as number (e.g., 45 for 45%)",
+        "discount_explanation": "Concise multi-line explanation of how the discount was derived",
+        "overcharges": [
+            {
+                "line_number": "Line number or identifier from bill (string or number)",
+                "service": "Service/charge description",
+                "amount": "Charge amount as number if possible else null",
+                "reason": "Reason this is considered an overcharge per rules"
+            }
+        ]
+    }
+
+    user_prompt = f"""
+Hospital Rules Document (extract):\n{rules_text}\n\nPatient Bill (extract):\n{bill_text}\n\nContext:\nHousehold Size: {household_size}\nAnnual Income: {annual_income}\nZIP Code: {zip_code}\n\nTasks:\n1. List any overcharges referencing rule rationale.\n2. Infer state from ZIP.\n3. Compute total eligible discount considering state programs, provider policy, and federal (CMS) where applicable, given household size & income.\n4. Provide short explanation lines for discount derivation.\n\nReturn ONLY JSON with keys: state_abbr, total_eligible_discount_percent, discount_explanation, overcharges. If no overcharges, overcharges should be an empty list. Do NOT include percent signs in total_eligible_discount_percent.\nSchema (illustrative example):\n{json.dumps(json_schema_description, indent=2)}\n"""
+
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {"role": "system", "content": system_instructions},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+    )
+    raw_text = response.choices[0].message.content.strip()
+
+    # Attempt to extract JSON robustly
+    data = extract_json(raw_text)
+    if not isinstance(data, dict):
+        # Fallback structure
+        data = {
+            "state_abbr": None,
+            "total_eligible_discount_percent": None,
+            "discount_explanation": "Model returned unexpected format.",
+            "overcharges": [],
+        }
+
+    # Normalize and coerce types
+    state_abbr = data.get("state_abbr")
+    if isinstance(state_abbr, str):
+        state_abbr = state_abbr.strip().upper()[:2] if len(state_abbr.strip()) >= 2 else None
+    else:
+        state_abbr = None
+
+    discount_percent = data.get("total_eligible_discount_percent")
+    try:
+        if isinstance(discount_percent, str):
+            discount_percent = discount_percent.strip().replace("%", "")
+        discount_percent = float(discount_percent) if discount_percent not in (None, "") else None
+    except Exception:
+        discount_percent = None
+
+    discount_explanation = data.get("discount_explanation") or ""
+    if not isinstance(discount_explanation, str):
+        discount_explanation = str(discount_explanation)
+
+    overcharges_list = []
+    for oc in data.get("overcharges", []) or []:
+        if not isinstance(oc, dict):
+            continue
+        line_number = oc.get("line_number")
+        service = oc.get("service")
+        reason = oc.get("reason")
+        amount_val = oc.get("amount")
+        try:
+            if isinstance(amount_val, str):
+                amount_val = amount_val.replace("$", "").replace(",", "").strip()
+            amount_val = float(amount_val)
+        except Exception:
+            amount_val = None
+        # Only include if there's at least service & reason
+        if service and reason:
+            overcharges_list.append(
+                {
+                    "line_number": line_number,
+                    "service": service,
+                    "amount": amount_val,
+                    "reason": reason,
+                }
+            )
+
+    return {
+        "state_abbr": state_abbr,
+        "total_eligible_discount_percent": discount_percent,
+        "discount_explanation": discount_explanation.strip(),
+        "overcharges": overcharges_list,
+        "raw_model_text": raw_text,
+    }
+
+
+def _format_overcharge_report_for_letter(structured):
+    """Create a readable text summary from the structured AI output for the letter prompt."""
+    if not structured:
+        return "No analysis available."
+    lines = []
+    if structured.get("state_abbr"):
+        lines.append(f"State: {structured['state_abbr']}")
+    if structured.get("total_eligible_discount_percent") is not None:
+        lines.append(
+            f"Total Eligible Discount: {int(structured['total_eligible_discount_percent'])}%" if structured['total_eligible_discount_percent'] is not None else "Total Eligible Discount: N/A"
+        )
+    if structured.get("discount_explanation"):
+        lines.append("Discount Explanation:\n" + structured["discount_explanation"].strip())
+    ocs = structured.get("overcharges", [])
+    if not ocs:
+        lines.append("Overcharges: None detected")
+    else:
+        lines.append("Overcharges:")
+        for oc in ocs:
+            ln = oc.get("line_number")
+            svc = oc.get("service")
+            amt = oc.get("amount")
+            reason = oc.get("reason")
+            amt_str = f"${amt:,.2f}" if isinstance(amt, (int, float)) else "(amount n/a)"
+            lines.append(f"- Line {ln}: {svc} {amt_str} | Reason: {reason}")
+    return "\n".join(lines)
+
+
+def draft_dispute_letter(patient_name, hospital_name, bill_text, structured_report):
+    if client is None:
+        raise RuntimeError("Missing OPENAI_API_KEY")
+    readable_summary = _format_overcharge_report_for_letter(structured_report)
+    prompt = f"""
+Draft a formal, concise yet firm letter to dispute identified overcharges for patient {patient_name} at {hospital_name}.
+Include citation to financial assistance and discount eligibility if relevant. Maintain professional tone.
+
+Structured Analysis Summary:
+{readable_summary}
 """
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
@@ -364,6 +504,23 @@ Overcharges:
         temperature=0,
     )
     return response.choices[0].message.content
+
+
+def overcharges_found(ai_result) -> bool:
+    """Return True if overcharges were found.
+
+    Accepts either legacy raw text (string) or structured dict.
+    """
+    if not ai_result:
+        return False
+    # Structured path
+    if isinstance(ai_result, dict):
+        ocs = ai_result.get("overcharges", [])
+        return bool(ocs)
+    # Legacy text path
+    if re.search(r"\bNo overcharges? detected\b", str(ai_result), re.IGNORECASE):
+        return False
+    return True
 
 
 @dispute_bp.route("/api/dispute", methods=["GET"])
@@ -376,6 +533,16 @@ def analyze():
     provider = request.form.get('provider')
     uploaded_rules = request.files.get('rules_pdf')
     bill_file = request.files.get('bill_pdf')
+    # Optional patient context (backward compatible defaults)
+    try:
+        household_size = int(request.form.get('household_size', 1))
+    except Exception:
+        household_size = 1
+    try:
+        annual_income = float(request.form.get('annual_income', 0))
+    except Exception:
+        annual_income = 0.0
+    zip_code = request.form.get('zip_code', '')
 
     if not bill_file:
         return jsonify({"error": "Please upload a patient bill PDF."}), 400
@@ -407,19 +574,53 @@ def analyze():
         return jsonify({"error": f"Failed to read rules PDF: {e}"}), 400
 
     try:
-        ai_result = ai_check_overcharges(rules_text, bill_text)
-        dispute_letter = draft_dispute_letter(
-            request.form.get('patient_name', 'John Doe'),
-            provider if provider else 'Custom Provider',
-            bill_text,
-            ai_result,
+        # Structured analysis
+        ai_structured = ai_check_overcharges_and_discount(
+            rules_text, bill_text, household_size, annual_income, zip_code
         )
+        # For backward compatibility, keep a simple legacy summary text similar to old format
+        legacy_lines = []
+        if ai_structured.get("overcharges"):
+            legacy_lines.append("Overcharges:")
+            for oc in ai_structured["overcharges"]:
+                ln = oc.get("line_number")
+                svc = oc.get("service")
+                amt = oc.get("amount")
+                amt_str = f"${amt:,.2f}" if isinstance(amt, (int, float)) else "(n/a)"
+                legacy_lines.append(f"- Line {ln}: {svc} {amt_str} | Reason: {oc.get('reason')}")
+        else:
+            legacy_lines.append("Overcharges: No overcharges detected")
+        if ai_structured.get("state_abbr"):
+            legacy_lines.append(f"State: {ai_structured['state_abbr']}")
+        if ai_structured.get("total_eligible_discount_percent") is not None:
+            legacy_lines.append(
+                f"Total Eligible Discount: {int(ai_structured['total_eligible_discount_percent'])}%"
+            )
+        if ai_structured.get("discount_explanation"):
+            legacy_lines.append(ai_structured["discount_explanation"].strip())
+        ai_result_legacy = "\n".join(legacy_lines)
+
+        # Draft letter only if overcharges found
+        dispute_letter = ""
+        if overcharges_found(ai_structured):
+            dispute_letter = draft_dispute_letter(
+                request.form.get('patient_name', 'John Doe'),
+                provider if provider else 'Custom Provider',
+                bill_text,
+                ai_structured,
+            )
     except Exception as e:
         return jsonify({"error": f"AI processing failed: {e}"}), 500
 
     return jsonify({
         "providers": list(PROVIDER_RULES.keys()),
-        "ai_result": ai_result,
+        "ai_result": ai_result_legacy,  # legacy combined text
+        "ai_structured": {
+            "state_abbr": ai_structured.get("state_abbr"),
+            "total_eligible_discount_percent": ai_structured.get("total_eligible_discount_percent"),
+            "discount_explanation": ai_structured.get("discount_explanation"),
+            "overcharges": ai_structured.get("overcharges"),
+        },
         "dispute_letter": dispute_letter,
     })
 
