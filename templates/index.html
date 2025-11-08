@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Nearby Hospital Prices</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 24px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin: 12px 0; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    input[type="text"], button { padding: 10px; font-size: 16px; }
+    button { cursor: pointer; }
+    .muted { color: #666; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .spinner { display: none; }
+    .actions a { margin-right: 12px; text-decoration: none; }
+    .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>Nearby Hospital Prices</h1>
+  <div class="card">
+    <div class="row">
+      <input id="condition" type="text" placeholder="Describe your condition (e.g., 'MRI brain', 'stitches')" style="flex:1; min-width: 260px;" />
+      <button id="findBtn" disabled>Find Nearby Hospitals</button>
+    </div>
+    <p class="muted" style="margin-top:8px">
+      We’ll request browser location (not stored). Prices are estimates—verify with providers.
+    </p>
+    <div id="status" class="muted mono" style="margin-top:8px"></div>
+    <div id="spinner" class="spinner">Loading…</div>
+  </div>
+
+  <div id="results"></div>
+
+  <script>
+    let coords = null;
+    const statusEl = document.getElementById("status");
+    const spinner = document.getElementById("spinner");
+    const resultsEl = document.getElementById("results");
+    const findBtn = document.getElementById("findBtn");
+    const conditionEl = document.getElementById("condition");
+
+    function setBusy(b) {
+      spinner.style.display = b ? "block" : "none";
+      findBtn.disabled = b || !conditionEl.value.trim();
+    }
+
+    conditionEl.addEventListener("input", () => {
+      findBtn.disabled = !conditionEl.value.trim();
+    });
+
+    conditionEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (!findBtn.disabled) {
+          findBtn.click();
+        }
+      }
+    });
+
+    function mapsLinkFor(r) {
+      const origin = coords ? `&origin=${encodeURIComponent(coords.lat + "," + coords.lon)}` : "&origin=My+Location";
+      if (r.maps_url) return `${r.maps_url}${origin}`;
+      if (typeof r.latitude === "number" && typeof r.longitude === "number") {
+        return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(coords.lat + "," + coords.lon)}&destination=${r.latitude},${r.longitude}`;
+      }
+      if (r.address) {
+        return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(coords.lat + "," + coords.lon)}&destination=${encodeURIComponent(r.address)}`;
+      }
+      return null;
+    }
+
+    async function runSearch() {
+      const condition = conditionEl.value.trim();
+      if (!condition) { statusEl.textContent = "Enter a condition."; return; }
+      if (!coords) { statusEl.textContent = "No location."; return; }
+
+      setBusy(true);
+      resultsEl.innerHTML = "";
+      statusEl.textContent = "Fetching hospitals…";
+
+      try {
+        const resp = await fetch("/api/hospitals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: coords.lat, lon: coords.lon, condition })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          statusEl.textContent = data.error || "Request failed.";
+          return;
+        }
+        const items = data.results || [];
+        if (!items.length) {
+          resultsEl.innerHTML = `<div class="card">No results. Try a broader description.</div>`;
+        } else {
+          for (const r of items) {
+            const price = (r.price_usd == null) ? "—" : `$${Number(r.price_usd).toLocaleString()}`;
+            const dist = (r.distance_km == null) ? "" : ` • ${r.distance_km} km`;
+            const est = r.price_is_estimate ? " (est.)" : "";
+            const phone = r.phone ? ` • ${r.phone}` : "";
+            const addr = r.address ? `<div class="muted">${r.address}</div>` : "";
+            const notes = r.notes ? `<div class="muted">${r.notes}</div>` : "";
+            const websiteLink = r.url ? `<a class="pill" href="${r.url}" target="_blank" rel="noopener">Website</a>` : "";
+            const mapsUrl = mapsLinkFor(r);
+            const mapsLink = mapsUrl ? `<a class="pill" href="${mapsUrl}" target="_blank" rel="noopener">🗺️ Maps</a>` : "";
+            resultsEl.insertAdjacentHTML("beforeend", `
+              <div class="card">
+                <div><strong>${r.name}</strong> — <strong>${price}${est}</strong>${dist}${phone}</div>
+                ${addr}
+                <div class="actions" style="margin-top:8px;">
+                  ${mapsLink} ${websiteLink}
+                </div>
+                ${notes}
+              </div>
+            `);
+          }
+        }
+        statusEl.textContent = `Found ${items.length} option(s), sorted by price.`;
+      } catch {
+        statusEl.textContent = "Network or server error.";
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    findBtn.addEventListener("click", () => {
+      if (!conditionEl.value.trim()) {
+        statusEl.textContent = "Enter a condition first.";
+        return;
+      }
+      statusEl.textContent = "Requesting location…";
+      setBusy(true);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            statusEl.textContent = `Location: ${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}. Searching…`;
+          runSearch();
+        },
+        () => {
+          statusEl.textContent = "Location denied/unavailable.";
+          setBusy(false);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  </script>
+</body>
+</html>
