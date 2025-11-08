@@ -336,19 +336,19 @@ def ai_check_overcharges(rules_text, bill_text):
     if client is None:
         raise RuntimeError("Missing OPENAI_API_KEY")
     prompt = f"""
-You are a hospital billing auditor AI.
+    You are a hospital billing auditor AI.
 
-Hospital Rules:
-{rules_text}
+    Hospital Rules:
+    {rules_text}
 
-Patient Bill:
-{bill_text}
+    Patient Bill:
+    {bill_text}
 
-Instructions:
-- Identify overcharges in the patient bill based on hospital rules.
-- For each, provide line number, service, amount, and reason.
-- If none, say "No overcharges detected".
-"""
+    Instructions:
+    - Identify overcharges in the patient bill based on hospital rules.
+    - For each, provide line number, service, amount, and reason.
+    - If none, say "No overcharges detected".
+    """
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -372,27 +372,32 @@ def ai_check_overcharges_and_discount(rules_text, bill_text, household_size, ann
     if client is None:
         raise RuntimeError("Missing OPENAI_API_KEY")
 
+    # Strengthen system instructions & embed strict mini-schema to maximize structured reliability
     system_instructions = (
-        "You are a hospital billing auditor AI. Output ONLY valid JSON matching the schema. "
-        "No prose outside JSON. Percent values should be numeric without the % sign where possible."
+        "You are a hospital billing auditor AI. OUTPUT ONLY VALID JSON. No commentary outside JSON. "
+        "Return an object with keys: state_abbr (string|null), total_eligible_discount_percent (number|null), "
+        "discount_explanation (string), overcharges (array). Each overcharge is an object with: line_number (string|number|null), "
+        "service (string), amount (number|null), reason (string). Amount MUST be numeric (no $ or commas) if possible. "
+        "Do not include percent signs in total_eligible_discount_percent. Empty lists are allowed."
     )
 
+    # Compact schema example (shown to model). Kept minimal to reduce hallucination chance.
     json_schema_description = {
-        "state_abbr": "Two-letter US state abbreviation derived from ZIP (null if uncertain)",
-        "total_eligible_discount_percent": "Estimated total discount percentage as number (e.g., 45 for 45%)",
-        "discount_explanation": "Concise multi-line explanation of how the discount was derived",
+        "state_abbr": "CA",
+        "total_eligible_discount_percent": 45,
+        "discount_explanation": "Applied state charity care 30% + provider financial aid 15%.",
         "overcharges": [
             {
-                "line_number": "Line number or identifier from bill (string or number)",
-                "service": "Service/charge description",
-                "amount": "Charge amount as number if possible else null",
-                "reason": "Reason this is considered an overcharge per rules"
+                "line_number": 12,
+                "service": "MRI Scan",
+                "amount": 1800.00,
+                "reason": "Exceeds contract allowed amount per Section 4.A"
             }
         ]
     }
 
     user_prompt = f"""
-Hospital Rules Document (extract):\n{rules_text}\n\nPatient Bill (extract):\n{bill_text}\n\nContext:\nHousehold Size: {household_size}\nAnnual Income: {annual_income}\nZIP Code: {zip_code}\n\nTasks:\n1. List any overcharges referencing rule rationale.\n2. Infer state from ZIP.\n3. Compute total eligible discount considering state programs, provider policy, and federal (CMS) where applicable, given household size & income.\n4. Provide short explanation lines for discount derivation.\n\nReturn ONLY JSON with keys: state_abbr, total_eligible_discount_percent, discount_explanation, overcharges. If no overcharges, overcharges should be an empty list. Do NOT include percent signs in total_eligible_discount_percent.\nSchema (illustrative example):\n{json.dumps(json_schema_description, indent=2)}\n"""
+Hospital Rules Document (extract):\n{rules_text}\n\nPatient Bill (extract):\n{bill_text}\n\nContext:\nHousehold Size: {household_size}\nAnnual Income: {annual_income}\nZIP Code: {zip_code}\n\nTasks:\n1. Identify any overcharges referencing rule rationale precisely (section/page if available).\n2. Infer two-letter state from ZIP (or null if unsure).\n3. Estimate total eligible discount considering state programs, provider policy, and federal (CMS) where applicable. Use numeric percent without % symbol.\n4. Provide concise multi-line discount_explanation summarizing derivation components.\n5. Ensure overcharges array is empty when none found.\n\nReturn ONLY JSON with exactly these keys. Example structure: {json.dumps(json_schema_description, separators=(',',':'))}\n"""
 
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
