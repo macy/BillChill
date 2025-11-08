@@ -1,104 +1,158 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BillChill — Next.js + Flask
 
-## Getting Started (Frontend + Flask Backend)
+This repo contains:
+- A Next.js 16 frontend (React 19) under `app/`
+- A unified Flask backend under `app/backend/server.py` for both hospitals search and dispute analysis
 
-This repository now contains:
+Key backend entrypoints:
+- Hospitals API: [`hospitals_bp` → `hospitals`](app/backend/server.py)
+- Dispute API: [`dispute_bp` → `analyze`](app/backend/server.py) and [`dispute_home`](app/backend/server.py)
 
-* A Next.js 16 frontend (React 19) under `app/`.
-* A Flask microservice under `app/hospital/app.py` that calls OpenRouter + Nominatim.
+## Environment Variables
 
-### 1. Environment Variables
-
-Create a `.env.local` (frontend) for optional proxy base:
-
+Frontend (`.env.local`):
+```ini
+NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:5000
 ```
-FLASK_BASE_URL=http://127.0.0.1:5000
-```
 
-Set backend variables in your shell or a `.env` loaded before starting Flask:
-
-```
+Backend (shell env or `.env` at repo root, auto-loaded):
+```bash
+# Required for hospitals search (OpenRouter Sonar)
 export OPENROUTER_API_KEY=sk-...
+
+# Required for AI analysis and letter drafting (OpenAI)
+export OPENAI_API_KEY=sk-...
+
+# Recommended for Nominatim (reverse/forward geocoding)
 export NOMINATIM_EMAIL=you@example.com
+
+# Frontend origin allowed by CORS
 export CORS_ALLOW_ORIGIN=http://localhost:3000
 ```
 
-On Windows PowerShell:
-
+Windows PowerShell:
 ```powershell
-$env:OPENROUTER_API_KEY="sk-..."; $env:NOMINATIM_EMAIL="you@example.com"; $env:CORS_ALLOW_ORIGIN="http://localhost:3000"
+$env:OPENROUTER_API_KEY="sk-..."; `
+$env:OPENAI_API_KEY="sk-..."; `
+$env:NOMINATIM_EMAIL="you@example.com"; `
+$env:CORS_ALLOW_ORIGIN="http://localhost:3000"
 ```
 
-### 2. Install Dependencies
+## Install
 
 Frontend:
-
 ```bash
 npm install
 ```
 
-Backend (create a virtual env if desired):
-
+Backend (use a venv if desired):
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # PowerShell: .venv\Scripts\Activate.ps1
-pip install -r app/hospital/requirements.txt
+# PowerShell: .venv\Scripts\Activate.ps1
+source .venv/bin/activate
+pip install -r app/backend/requirements.txt
 ```
 
-### 3. Run Both Services
+## Run
 
-In one terminal (frontend):
-
+Frontend (VS Code terminal 1):
 ```bash
 npm run dev
 ```
 
-In another terminal (backend):
-
+Backend (VS Code terminal 2):
 ```bash
-python app/hospital/app.py
+python app/backend/server.py
 ```
 
-Visit `http://localhost:3000/hospital` and search for a procedure (e.g. "MRI"). The browser will request geolocation, then the Next.js API route (`/api/hospitals`) proxies to Flask.
+Visit:
+- Hospitals finder: http://localhost:3000/hospital
+- Dispute flow: http://localhost:3000/dispute
 
-### 4. Flow Overview
+## Flow Overview
 
-1. User enters condition/procedure and grants location.
-2. Frontend calls `POST /api/hospitals` with `{ lat, lon, condition }`.
-3. Next.js server route (`app/api/hospitals/route.ts`) forwards to Flask at `FLASK_BASE_URL/api/hospitals`.
-4. Flask queries OpenRouter (Perplexity Sonar) + validates + distance filters + enriches; returns JSON results.
-5. Frontend renders sorted list with price, distance, maps & website links.
+1. User interacts with the frontend.
+2. Frontend calls the Flask backend at `NEXT_PUBLIC_BACKEND_URL`.
+3. Hospitals search posts to `/api/hospitals`.
+4. Dispute analysis uploads PDFs to `/api/dispute/analyze`.
+5. Backend returns structured JSON used by the UI in [app/hospital/page.tsx](app/hospital/page.tsx) and [app/dispute/page.tsx](app/dispute/page.tsx).
 
-### 5. Troubleshooting
+## API Reference
 
-* CORS errors: ensure `CORS_ALLOW_ORIGIN` matches the exact frontend origin (including protocol + port).
-* 502 from frontend: check Flask logs; may be OpenRouter timeout or missing `OPENROUTER_API_KEY`.
-* Geolocation denied: browser will show an inline error; allow location and retry search.
-* Slow searches: OpenRouter + Nominatim calls can take a few seconds; adjust `timeout` values in code if needed.
+Health
+- GET `/health` → `{ ok: true }`
 
-### 6. Security Notes
+Hospitals (Nearby price estimates)
+- POST `/api/hospitals`
+  - Body (JSON): `{ lat: number, lon: number, condition: string }`
+  - Response: `{ results: HospitalResult[] }`
+  - Implementation: [`hospitals`](app/backend/server.py)
+  - Notes:
+    - Uses OpenRouter Perplexity Sonar for web search.
+    - Reverse/forward geocoding via Nominatim.
+    - Results filtered to ≈30–37 miles and sorted by price then distance.
+  - Frontend consumer: [app/hospital/page.tsx](app/hospital/page.tsx)
 
-* Keep `OPENROUTER_API_KEY` only on the backend; the frontend never sees it.
-* For production deployments, restrict CORS and consider rate limiting and persistent caching of geocode results.
+Dispute (Analyze bill + draft letter)
+- GET `/api/dispute` → `{ status: "ok", providers: string[] }`
+  - Implementation: [`dispute_home`](app/backend/server.py)
+- POST `/api/dispute/analyze` (multipart/form-data)
+  - Fields:
+    - bill_pdf: PDF (required)
+    - rules_pdf: PDF (optional if provider chosen)
+    - provider: one of `United | Providence | Molina | CMS` (optional)
+    - patient_name: string (optional, default "John Doe")
+    - household_size: number (optional, default 1)
+    - annual_income: number (optional, default 0)
+    - zip_code: string (optional)
+  - Response:
+    ```json
+    {
+      "providers": ["United","Providence","Molina","CMS"],
+      "ai_result": "string (legacy combined text)",
+      "ai_structured": {
+        "state_abbr": "CA",
+        "total_eligible_discount_percent": 45,
+        "discount_explanation": "string",
+        "overcharges": [
+          { "line_number": "12", "service": "MRI", "amount": 1234.56, "reason": "string" }
+        ]
+      },
+      "dispute_letter": "string (may be empty if no overcharges)"
+    }
+    ```
+  - Implementation:
+    - Structured analysis: [`ai_check_overcharges_and_discount`](app/backend/server.py)
+    - Letter drafting: [`draft_dispute_letter`](app/backend/server.py)
+    - Legacy text builder and safety checks handled in [`analyze`](app/backend/server.py)
+  - Frontend consumer: [app/dispute/page.tsx](app/dispute/page.tsx)
 
-### 7. Future Improvements
+## Files & Folders
 
-* Add pagination & more robust validation.
-* Introduce optimistic UI skeleton loaders.
-* Store frequently queried hospitals in a database with nightly refresh.
-* Replace direct Sonar search with curated price datasets when available.
+- Backend service: [app/backend/server.py](app/backend/server.py)
+- Backend deps: [app/backend/requirements.txt](app/backend/requirements.txt)
+- Provider policy PDFs: `app/dispute/policy_docs/`
+  - Mapped in [`PROVIDER_RULES`](app/backend/server.py)
+- Uploads folder (auto-created): `app/dispute/uploads/`
 
-## Learn More
+## Notes
 
-To learn more about Next.js, take a look at the following resources:
+- PDF text extraction uses `pdfplumber` via [`extract_text_from_pdf`](app/backend/server.py).
+- The dispute endpoint returns both a legacy summary (`ai_result`) and a structured payload (`ai_structured`) for robust UI parsing.
+- The letter is only generated when overcharges are found, see [`overcharges_found`](app/backend/server.py).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Troubleshooting
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- CORS: ensure `CORS_ALLOW_ORIGIN` matches your frontend origin exactly.
+- Keys:
+  - Hospitals search requires `OPENROUTER_API_KEY`.
+  - Dispute analysis requires `OPENAI_API_KEY`.
+- Geolocation denied (hospitals page): browser will show an error; allow location and retry.
+- Health check: `GET ${NEXT_PUBLIC_BACKEND_URL}/health`.
 
-## Deploy on Vercel
+## Tech
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Next.js 16, React 19
+- Flask 3, `flask-cors`
+- OpenRouter (Perplexity Sonar) for hospital discovery
+- OpenAI (`gpt-4.1-mini`) for dispute analysis and letters
