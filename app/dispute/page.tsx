@@ -10,11 +10,32 @@ export default function DisputePage() {
   const [rulesFile, setRulesFile] = useState<File | null>(null);
   const [provider, setProvider] = useState<string>("United");
   const [patientName, setPatientName] = useState<string>("John Doe");
+  const [householdSize, setHouseholdSize] = useState<string>("1");
+  const [annualIncome, setAnnualIncome] = useState<string>("");
+  const [zipCode, setZipCode] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const [aiResult, setAiResult] = useState<string>("");
   const [disputeLetter, setDisputeLetter] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
+  const [parsedState, setParsedState] = useState<string>("");
+  const [parsedDiscount, setParsedDiscount] = useState<string>("");
+  const [discountExplanation, setDiscountExplanation] = useState<string>("");
+  const [overchargeSection, setOverchargeSection] = useState<string>("");
+  
+  // Structured AI response shape from backend
+  type OverchargeItem = {
+    line_number?: string | number | null;
+    service?: string | null;
+    amount?: number | null;
+    reason?: string | null;
+  };
+  type AiStructured = {
+    state_abbr?: string | null;
+    total_eligible_discount_percent?: number | null;
+    discount_explanation?: string | null;
+    overcharges?: OverchargeItem[] | null;
+  };
   
   const PROVIDERS = ["United", "Providence", "Molina", "CMS"] as const;
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000"; // unified Flask backend
@@ -57,6 +78,8 @@ export default function DisputePage() {
     setError("");
     setAiResult("");
     setDisputeLetter("");
+    setParsedState("");
+    setParsedDiscount("");
     if (!file) {
       setError("Please upload your bill as a PDF.");
       return;
@@ -67,6 +90,10 @@ export default function DisputePage() {
     form.append("patient_name", patientName || "John Doe");
     form.append("bill_pdf", file);
     if (rulesFile) form.append("rules_pdf", rulesFile);
+    // New optional patient context for enhanced analysis
+    form.append("household_size", householdSize || "1");
+    form.append("annual_income", annualIncome || "0");
+    form.append("zip_code", zipCode || "");
 
     setLoading(true);
     try {
@@ -78,8 +105,48 @@ export default function DisputePage() {
       if (!res.ok) {
         throw new Error(data?.error || "Request failed");
       }
-      setAiResult(data.ai_result || "");
+      // Always keep legacy text for compatibility and for users copying full output
+      const full: string = data.ai_result || "";
+      setAiResult(full);
       setDisputeLetter(data.dispute_letter || "");
+
+      // Prefer structured JSON when available
+      const s: AiStructured | undefined = data.ai_structured;
+      if (s) {
+        setParsedState((s.state_abbr || "").toString());
+        const pct = s.total_eligible_discount_percent;
+        setParsedDiscount(
+          typeof pct === "number" && !isNaN(pct) ? `${Math.round(pct)}%` : ""
+        );
+        setDiscountExplanation(s.discount_explanation || "");
+
+        const items = Array.isArray(s.overcharges) ? s.overcharges : [];
+        if (items.length > 0) {
+          const lines = items.map((oc) => {
+            const ln = oc.line_number ?? "—";
+            const svc = oc.service || "Charge";
+            const amt =
+              typeof oc.amount === "number" && !isNaN(oc.amount)
+                ? `$${oc.amount.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}`
+                : "(n/a)";
+            const reason = oc.reason || "";
+            return `- Line ${ln}: ${svc} ${amt} | Reason: ${reason}`;
+          });
+          setOverchargeSection(lines.join("\n"));
+        } else {
+          setOverchargeSection("No overcharges detected");
+        }
+      } else {
+        // Fallback: parse the legacy string
+        const parsed = parseAiResult(full || "");
+        setParsedState(parsed.stateAbbr || "");
+        setParsedDiscount(parsed.totalDiscount || "");
+        setDiscountExplanation(parsed.discountExplanation || "");
+        setOverchargeSection(parsed.overchargesText || full);
+      }
     } catch (e: any) {
       setError(e?.message || "Something went wrong.");
     } finally {
@@ -106,12 +173,34 @@ export default function DisputePage() {
     URL.revokeObjectURL(url);
   }, [disputeLetter, patientName]);
 
+  // Parse AI result for State and Total Eligible Discount lines.
+  function parseAiResult(
+    text: string
+  ): { stateAbbr?: string; totalDiscount?: string; discountExplanation?: string; overchargesText?: string } {
+    if (!text) return {};
+    // Try to capture patterns like 'State: CA' and 'Total Eligible Discount: 45%'
+    const stateMatch = text.match(/(?:^|\n)\s*-?\s*State:\s*([A-Z]{2})/i);
+    const discountMatch = text.match(/(?:^|\n)\s*-?\s*Total Eligible Discount:\s*([0-9]+%)/i);
+    // Overcharges block up to the next header (State or Total Eligible Discount)
+    const overBlock = text.match(/Overcharges:\s*([\s\S]*?)(?:\n\s*-?\s*State\s*:|\n\s*-?\s*Total Eligible Discount\s*:|$)/i);
+    const overchargesText = overBlock ? overBlock[1].trim() : "";
+    // Anything after the Total Eligible Discount line is considered explanation
+    const explMatch = text.match(/Total Eligible Discount\s*:\s*[^\n\r]*[\r\n]+([\s\S]*)/i);
+    const discountExplanation = explMatch ? explMatch[1].trim() : "";
+    return {
+      stateAbbr: stateMatch ? stateMatch[1] : undefined,
+      totalDiscount: discountMatch ? discountMatch[1] : undefined,
+      discountExplanation: discountExplanation || undefined,
+      overchargesText: overchargesText || undefined,
+    };
+  }
+
   const renderFormattedLetter = () => {
     if (!disputeLetter) return null;
     return disputeLetter
       .split(/\n{2,}/)
       .map((para, i) => (
-        <p key={i} className="mb-4 leading-relaxed text-slate-700 whitespace-pre-line">
+        <p key={i} className="mb-3 whitespace-pre-line">
           {para.trim()}
         </p>
       ));
@@ -186,7 +275,7 @@ export default function DisputePage() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                   </svg>
                 </div>
-                <h3 className="text-2xl font-bold text-slate-800 mb-2">Got it! Analyzing...</h3>
+                <h3 className="text-2xl font-bold text-slate-800 mb-2">Got it!</h3>
                 {/* File name should now work without error */}
                 <p className="text-slate-500 font-medium">{file.name}</p>
               </div>
@@ -202,7 +291,7 @@ export default function DisputePage() {
             />
           </div>
 
-          {/* Provider, patient, and optional rules */}
+          {/* Provider, patient, optional rules */}
           <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-left animate-fade-in [animation-delay:150ms]">
             <div>
               <label className="block text-sm font-semibold text-slate-600 mb-2">Provider</label>
@@ -240,6 +329,45 @@ export default function DisputePage() {
             </div>
           </div>
 
+          {/* Patient financial context for discount eligibility */}
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-left animate-fade-in [animation-delay:200ms]">
+            <div>
+              <label className="block text-sm font-semibold text-slate-600 mb-2">Household size</label>
+              <input
+                type="number"
+                min={1}
+                value={householdSize}
+                onChange={(e) => setHouseholdSize(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                placeholder="1"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-600 mb-2">Annual income (USD)</label>
+              <input
+                type="number"
+                min={0}
+                step={1000}
+                value={annualIncome}
+                onChange={(e) => setAnnualIncome(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                placeholder="50000"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-600 mb-2">ZIP code</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{5}(-[0-9]{4})?"
+                value={zipCode}
+                onChange={(e) => setZipCode(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                placeholder="94103"
+              />
+            </div>
+          </div>
+
           {/* Actions */}
           <div className="mt-6 flex items-center justify-center gap-3">
             <button
@@ -261,7 +389,7 @@ export default function DisputePage() {
             </button>
             {file && (
               <button
-                onClick={() => { setFile(null); setRulesFile(null); setAiResult(""); setDisputeLetter(""); setError(""); }}
+                onClick={() => { setFile(null); setRulesFile(null); setAiResult(""); setDisputeLetter(""); setError(""); setParsedDiscount(""); setParsedState(""); setDiscountExplanation(""); setOverchargeSection(""); }}
                 className="inline-flex items-center gap-2 rounded-full bg-white text-slate-600 border border-slate-200 font-bold px-6 py-3 shadow-sm hover:shadow"
               >
                 Reset
@@ -277,6 +405,34 @@ export default function DisputePage() {
           {/* Results */}
           {(aiResult || disputeLetter) && (
             <div className="mt-10 space-y-8 text-left animate-fade-in [animation-delay:300ms]">
+              {/* Summary stats if parsed */}
+              {(parsedState || parsedDiscount || discountExplanation) && (
+                <div className="bg-white/90 backdrop-blur-md rounded-3xl p-6 shadow border border-slate-100/60 space-y-4">
+                  <h3 className="text-lg font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-100 text-teal-600 text-sm font-bold">%</span>
+                    Discount Eligibility
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <div className="text-slate-500 uppercase text-sm font-semibold tracking-wide">State</div>
+                      <div className="text-slate-800 font-medium">{parsedState || 'N/A'}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500 uppercase text-sm font-semibold tracking-wide">Total Eligible Discount</div>
+                      <div className="text-slate-800 font-medium">{parsedDiscount || 'N/A'}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500 uppercase text-sm font-semibold tracking-wide">Household / Income</div>
+                      <div className="text-slate-800 font-medium">{householdSize} / {annualIncome ? `$${Number(annualIncome).toLocaleString()}` : '—'}</div>
+                    </div>
+                  </div>
+                  {discountExplanation && (
+                    <div className="text-slate-600 text-sm leading-relaxed whitespace-pre-wrap border-t border-slate-200 pt-3">
+                      {discountExplanation}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Findings Panel */}
               <div className="bg-white/90 backdrop-blur-md rounded-3xl p-6 md:p-7 shadow-lg border border-slate-100/60">
                 <div className="flex items-start justify-between gap-4 mb-4">
@@ -284,9 +440,9 @@ export default function DisputePage() {
                     <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-100 text-teal-600 text-sm font-bold">AI</span>
                     Overcharge Findings
                   </h3>
-                  {aiResult && (
+                  {(overchargeSection || aiResult) && (
                     <button
-                      onClick={() => navigator.clipboard.writeText(aiResult)}
+                      onClick={() => navigator.clipboard.writeText(overchargeSection || aiResult)}
                       className="group inline-flex items-center gap-1 rounded-full bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold px-3 py-1.5 shadow-sm border border-teal-200 transition"
                       title="Copy findings"
                     >
@@ -299,7 +455,7 @@ export default function DisputePage() {
                   )}
                 </div>
                 <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
-                  {aiResult || <span className="italic text-slate-400">No findings returned.</span>}
+                  {overchargeSection || aiResult || <span className="italic text-slate-400">No findings returned.</span>}
                 </div>
               </div>
               {/* Dispute Letter Panel */}
@@ -307,7 +463,7 @@ export default function DisputePage() {
                 <div className="bg-gradient-to-br from-white/95 to-white/80 backdrop-blur-md rounded-[2.25rem] p-6 md:p-8 shadow-xl border border-slate-100/60 relative">
                   <div className="relative z-10">
                     <div className="flex items-start justify-between gap-4 mb-6">
-                      <h3 className="text-2xl font-black text-slate-800 tracking-tight">Draft Dispute Letter</h3>
+                      <h3 className="text-xl font-bold text-slate-800 tracking-tight">Draft Dispute Letter</h3>
                       <div className="flex items-center gap-2 flex-wrap">
                         <button
                           onClick={handleCopyLetter}
@@ -336,7 +492,7 @@ export default function DisputePage() {
                         )}
                       </div>
                     </div>
-                    <div className="prose prose-sm max-w-none">
+                    <div className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
                       {renderFormattedLetter()}
                     </div>
                     <div className="mt-6 pt-4 border-t border-slate-200 text-[11px] text-slate-500 font-medium flex items-center gap-2">
