@@ -4,10 +4,11 @@ import os
 from openai import OpenAI
 
 app = Flask(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY_HERE"))
-
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# OpenAI client
+client = OpenAI(api_key=os.getenv("INSET_OPENAI_API_KEY"))
 
 # Preloaded provider rules PDFs
 PROVIDER_RULES = {
@@ -26,7 +27,13 @@ def extract_text_from_pdf(file_path):
                 text += page_text + "\n"
     return text
 
-def ai_check_overcharges(rules_text, bill_text):
+def ai_check_overcharges_and_discount(rules_text, bill_text, household_size, annual_income, zip_code):
+    """
+    Ask GPT to:
+    1. Detect overcharges in the bill based on hospital rules.
+    2. Determine the patient's state from the ZIP code.
+    3. Estimate the patient's total eligible discount (state + provider + federal).
+    """
     prompt = f"""
 You are a hospital billing auditor AI.
 
@@ -36,10 +43,27 @@ Hospital Rules:
 Patient Bill:
 {bill_text}
 
-Instructions:
-- Identify overcharges in the patient bill based on hospital rules.
-- For each, provide line number, service, amount, and reason.
-- If none, say "No overcharges detected".
+Patient Info:
+Household Size: {household_size}
+Annual Income: {annual_income}
+ZIP Code: {zip_code}
+
+Tasks:
+1. Identify overcharges in the patient bill based on hospital rules.
+   - For each, provide line number, service, amount, and reason.
+   - If none, say "No overcharges detected".
+2. Determine the patient's state based on the ZIP code.
+3. Estimate the patient's total eligible discount based on:
+   - State law / state assistance programs
+   - Provider financial assistance policies
+   - Federal or CMS programs if applicable
+   - Household size and annual income
+
+Output format:
+- Overcharges:
+[Line info, service, amount, reason or "No overcharges detected"]
+- State: [State abbreviation]
+- Total Eligible Discount: [percentage]
 """
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
@@ -48,13 +72,13 @@ Instructions:
     )
     return response.choices[0].message.content
 
-def draft_dispute_letter(patient_name, hospital_name, bill_text, ai_overcharge_report):
+def draft_dispute_letter(patient_name, provider_name, bill_text, ai_overcharge_report):
     prompt = f"""
-Draft a formal letter to dispute overcharges for {patient_name} at {hospital_name}.
-Reference the following overcharges and request correction.
-
-Overcharges:
+Draft a professional dispute letter for {patient_name} at {provider_name}.
+Include the overcharges and the total eligible discount from the AI analysis:
 {ai_overcharge_report}
+
+Keep it formal, polite, and concise.
 """
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
@@ -72,6 +96,9 @@ def analyze():
     provider = request.form.get('provider')
     uploaded_rules = request.files.get('rules_pdf')
     bill_file = request.files.get('bill_pdf')
+    household_size = int(request.form.get('household_size', 1))
+    annual_income = float(request.form.get('annual_income', 0))
+    zip_code = request.form.get('zip_code', "")
 
     if not bill_file:
         return "Please upload a patient bill PDF.", 400
@@ -92,13 +119,22 @@ def analyze():
 
     rules_text = extract_text_from_pdf(rules_path)
 
-    # Run AI logic
-    ai_result = ai_check_overcharges(rules_text, bill_text)
-    dispute_letter = draft_dispute_letter("John Doe", provider if provider else "Custom Provider", bill_text, ai_result)
+    # AI overcharge + total discount analysis
+    ai_result = ai_check_overcharges_and_discount(
+        rules_text, bill_text, household_size, annual_income, zip_code
+    )
 
-    return render_template('index.html', 
-                           providers=list(PROVIDER_RULES.keys()), 
-                           ai_result=ai_result, 
+    # Draft dispute letter including AI analysis
+    dispute_letter = draft_dispute_letter(
+        "John Doe",
+        provider if provider else "Custom Provider",
+        bill_text,
+        ai_result
+    )
+
+    return render_template('index.html',
+                           providers=list(PROVIDER_RULES.keys()),
+                           ai_result=ai_result,
                            dispute_letter=dispute_letter)
 
 if __name__ == '__main__':

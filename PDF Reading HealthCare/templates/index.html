@@ -21,11 +21,20 @@
         <label>Upload Patient Bill (PDF):</label><br>
         <input type="file" name="bill_pdf" required><br><br>
 
+        <label>Household Size:</label><br>
+        <input type="number" name="household_size" value="1" min="1" required><br><br>
+
+        <label>Annual Income (USD):</label><br>
+        <input type="number" name="annual_income" value="0" min="0" required><br><br>
+
+        <label>ZIP Code:</label><br>
+        <input type="text" name="zip_code" maxlength="5" required><br><br>
+
         <button type="submit">Analyze</button>
     </form>
 
     {% if ai_result %}
-        <h2>🔍 AI Overcharge Analysis</h2>
+        <h2>🔍 AI Overcharge Analysis & Discount Estimate</h2>
         <pre>{{ ai_result }}</pre>
 
         <h2>✉️ Draft Dispute Letter</h2>
