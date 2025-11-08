@@ -7,6 +7,16 @@ export default function DisputePage() {
   const [isDragging, setIsDragging] = useState(false);
   // Tell TypeScript this state can hold a File object or null
   const [file, setFile] = useState<File | null>(null);
+  const [rulesFile, setRulesFile] = useState<File | null>(null);
+  const [provider, setProvider] = useState<string>("United");
+  const [patientName, setPatientName] = useState<string>("John Doe");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string>("");
+  const [aiResult, setAiResult] = useState<string>("");
+  const [disputeLetter, setDisputeLetter] = useState<string>("");
+
+  const PROVIDERS = ["United", "Providence", "Molina", "CMS"] as const;
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000"; // unified Flask backend
 
   // Drag Handler with explicit Type
   const handleDrag = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -31,10 +41,50 @@ export default function DisputePage() {
 
   // Manual Upload Handler with explicit Type
   const handleManualUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-     if (e.target.files && e.target.files[0]) {
+    if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
     }
-  }
+  };
+
+  const handleRulesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setRulesFile(e.target.files[0]);
+    }
+  };
+
+  const handleSubmit = async () => {
+    setError("");
+    setAiResult("");
+    setDisputeLetter("");
+    if (!file) {
+      setError("Please upload your bill as a PDF.");
+      return;
+    }
+
+    const form = new FormData();
+    form.append("provider", provider);
+    form.append("patient_name", patientName || "John Doe");
+    form.append("bill_pdf", file);
+    if (rulesFile) form.append("rules_pdf", rulesFile);
+
+    setLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/dispute/analyze`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Request failed");
+      }
+      setAiResult(data.ai_result || "");
+      setDisputeLetter(data.dispute_letter || "");
+    } catch (e: any) {
+      setError(e?.message || "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <main className="min-h-screen bg-slate-50/80 relative">
@@ -94,7 +144,7 @@ export default function DisputePage() {
                   {isDragging ? "Drop it like it's hot! 🔥" : "Drop your bill here"}
                 </h3>
                 <p className="text-slate-500 mb-8 text-lg font-medium">
-                  or click to browse (PDF, JPG, PNG)
+                  or click to browse (PDF only)
                 </p>
               </div>
             ) : (
@@ -116,10 +166,96 @@ export default function DisputePage() {
               type="file" 
               onChange={handleManualUpload}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
-              accept=".pdf,.jpg,.png" 
+              accept=".pdf" 
               disabled={file !== null}
             />
           </div>
+
+          {/* Provider, patient, and optional rules */}
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-left animate-fade-in [animation-delay:150ms]">
+            <div>
+              <label className="block text-sm font-semibold text-slate-600 mb-2">Provider</label>
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+              >
+                {PROVIDERS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-600 mb-2">Patient name</label>
+              <input
+                type="text"
+                value={patientName}
+                onChange={(e) => setPatientName(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                placeholder="John Doe"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-600 mb-2">Optional rules PDF</label>
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={handleRulesUpload}
+                className="w-full rounded-xl border border-slate-200 bg-white/80 px-4 py-2.5 shadow-sm"
+              />
+              {rulesFile && (
+                <p className="mt-1 text-xs text-slate-500">{rulesFile.name}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              onClick={handleSubmit}
+              disabled={!file || loading}
+              className="group inline-flex items-center gap-2 rounded-full bg-teal-600 text-white font-bold px-6 py-3 shadow hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? (
+                <>
+                  <span className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"></span>
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  Analyze with AI
+                  <span className="group-hover:translate-x-1 transition-transform">→</span>
+                </>
+              )}
+            </button>
+            {file && (
+              <button
+                onClick={() => { setFile(null); setRulesFile(null); setAiResult(""); setDisputeLetter(""); setError(""); }}
+                className="inline-flex items-center gap-2 rounded-full bg-white text-slate-600 border border-slate-200 font-bold px-6 py-3 shadow-sm hover:shadow"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div className="mt-4 text-red-600 font-semibold">{error}</div>
+          )}
+
+          {/* Results */}
+          {(aiResult || disputeLetter) && (
+            <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6 text-left animate-fade-in [animation-delay:300ms]">
+              <div className="bg-white/80 backdrop-blur-md rounded-3xl p-6 shadow">
+                <h3 className="text-xl font-bold text-slate-800 mb-3">AI Overcharge Findings</h3>
+                <pre className="whitespace-pre-wrap text-slate-700 text-sm">{aiResult}</pre>
+              </div>
+              <div className="bg-white/80 backdrop-blur-md rounded-3xl p-6 shadow">
+                <h3 className="text-xl font-bold text-slate-800 mb-3">Draft Dispute Letter</h3>
+                <pre className="whitespace-pre-wrap text-slate-700 text-sm">{disputeLetter}</pre>
+              </div>
+            </div>
+          )}
 
           {/* Security Reassurance */}
           <div className="mt-6 flex items-center justify-center gap-2 text-slate-400 text-sm font-medium animate-fade-in [animation-delay:300ms]">
