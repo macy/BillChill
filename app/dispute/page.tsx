@@ -37,7 +37,29 @@ export default function DisputePage() {
     discount_explanation?: string | null;
     overcharges?: OverchargeItem[] | null;
   };
-  
+
+  // NEW STATE for pretty overcharge rendering
+  const [overcharges, setOvercharges] = useState<OverchargeItem[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+
+  // Toggle expand/collapse for a pill
+  const toggleRow = (i: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  };
+
+  // Money formatter used in several places
+  const formatMoney = (n: number | null | undefined) =>
+    typeof n === "number" && !isNaN(n)
+      ? `$${n.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`
+      : "(n/a)";
+
   const PROVIDERS = ["United", "Providence", "Molina", "CMS"] as const;
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000"; // unified Flask backend
 
@@ -122,23 +144,22 @@ export default function DisputePage() {
         setDiscountExplanation(s.discount_explanation || "");
 
         const items = Array.isArray(s.overcharges) ? s.overcharges : [];
+
+        // STORE the structured items for pretty UI; also keep a text fallback for the clipboard / legacy
         if (items.length > 0) {
+          setOvercharges(items);
+
           const lines = items.map((oc) => {
             const ln = oc.line_number ?? "—";
             const svc = oc.service || "Charge";
-            const amt =
-              typeof oc.amount === "number" && !isNaN(oc.amount)
-                ? `$${oc.amount.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}`
-                : "(n/a)";
+            const amt = formatMoney(oc.amount ?? null);
             const reason = oc.reason || "";
             return `- Line ${ln}: ${svc} ${amt} | Reason: ${reason}`;
           });
           setOverchargeSection(lines.join("\n"));
           setOvercharges(items as OverchargeItem[]);
         } else {
+          setOvercharges([]);
           setOverchargeSection("No overcharges detected");
           setOvercharges([]);
         }
@@ -199,6 +220,7 @@ export default function DisputePage() {
     };
   }
 
+  // Render the dispute letter as paragraphs, splitting on blank lines
   const renderFormattedLetter = () => {
     if (!disputeLetter) return null;
     return disputeLetter
@@ -209,11 +231,68 @@ export default function DisputePage() {
         </p>
       ));
   };
+  
+  // Pretty pill row for each overcharge item
+  function OverchargePill({
+    idx,
+    item,
+    expanded,
+    onToggle,
+  }: {
+    idx: number;
+    item: OverchargeItem;
+    expanded: boolean;
+    onToggle: (i: number) => void;
+  }) {
+    const ln = item.line_number ?? "—";
+    const title = item.service || "Charge";
+    const price = formatMoney(item.amount ?? null);
+
+    return (
+      <div className="rounded-2xl bg-gradient-to-r from-teal-50 to-sky-50 border border-teal-100 shadow-sm">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => onToggle(idx)}
+          className="w-full text-left px-4 py-3 md:px-5 md:py-4 flex items-center justify-between gap-3 hover:bg-white/60 transition"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/70 border border-teal-100 text-teal-700 text-xs font-semibold">
+              Line {String(ln)}
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/70 border border-sky-100 text-sky-700 text-xs font-semibold">
+              {title}
+            </span>
+            <span className="inline-flex items-center px-3 py-1 rounded-full bg-white/70 border border-emerald-100 text-emerald-700 text-xs font-semibold">
+              {price}
+            </span>
+          </div>
+
+          <svg
+            className={`w-5 h-5 flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+            strokeWidth={2} stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {expanded && item.reason && (
+          <div className="px-4 pb-4 md:px-5 md:pb-5 pt-0">
+            <div className="rounded-xl bg-white/80 border border-slate-100 p-3 text-sm text-slate-700">
+              <span className="block text-[11px] uppercase tracking-wide text-slate-400 font-semibold mb-1">Reason</span>
+              <p className="whitespace-pre-wrap leading-relaxed">{item.reason}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-50/80 relative">
       <BackgroundDecorations />
-      
+
       <div className="p-6 md:p-12 relative z-10">
          {/* HEADER */}
         <header className="max-w-5xl mx-auto flex justify-between items-center mb-12 md:mb-20 animate-fade-in">
@@ -509,7 +588,7 @@ export default function DisputePage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <button
                           onClick={handleCopyLetter}
-                          className="group inline-flex items-center gap-1 rounded-full bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold px-3 py-1.5 shadow-sm border border-teal-200 transition"
+                          className="group inline-flex items-center gap-1 rounded-full bg-teal-50 hover:bg-teal-100 text-teal-700 text-s font-semibold px-3 py-1.5 shadow-sm border border-teal-200 transition"
                           title="Copy letter"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
